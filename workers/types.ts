@@ -5,4 +5,5 @@
 export interface Env extends Cloudflare.Env {
 	POLICY_AUD: string;
 	TEAM_DOMAIN: string;
+	TEMP_MAIL2_ADMIN_PASSWORD: string;
 }

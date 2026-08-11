@@ -39,6 +39,46 @@ function getAccessUrls(teamDomain: string) {
 	return { issuer, certsUrl };
 }
 
+type IncomingEmailEvent = {
+	from: string;
+	to: string;
+	raw: ReadableStream;
+	rawSize: number;
+};
+
+async function routeToTempMail2(event: IncomingEmailEvent, env: Env) {
+	const raw = await new Response(event.raw).text();
+	const apiBase = env.TEMP_MAIL2_API_BASE.replace(/\/+$/, "");
+	const response = await fetch(`${apiBase}/admin/test/receive_mail`, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			"x-admin-auth": env.TEMP_MAIL2_ADMIN_PASSWORD,
+		},
+		body: JSON.stringify({
+			from: event.from,
+			to: event.to,
+			raw,
+		}),
+	});
+
+	let result: { success?: boolean; rejected?: string } | undefined;
+	try {
+		result = (await response.json()) as {
+			success?: boolean;
+			rejected?: string;
+		};
+	} catch {
+		// A non-JSON response is handled by the HTTP status below.
+	}
+
+	if (!response.ok || result?.success === false) {
+		throw new Error(
+			`Temp Mail 2 forwarding failed (${response.status}): ${result?.rejected ?? response.statusText}`,
+		);
+	}
+}
+
 // Main app that wraps the API and adds React Router fallback
 const app = new Hono<{ Bindings: Env }>();
 
@@ -111,11 +151,17 @@ app.all("*", (c) => {
 export default {
 	fetch: app.fetch,
 	async email(
-		event: { raw: ReadableStream; rawSize: number },
+		event: IncomingEmailEvent,
 		env: Env,
 		ctx: ExecutionContext,
 	) {
 		try {
+			const recipientDomain = event.to.split("@").at(-1)?.toLowerCase();
+			if (recipientDomain === env.TEMP_MAIL2_DOMAIN.toLowerCase()) {
+				await routeToTempMail2(event, env);
+				return;
+			}
+
 			await receiveEmail(event, env, ctx);
 		} catch (e) {
 			console.error("Failed to process incoming email:", (e as Error).message, (e as Error).stack);
